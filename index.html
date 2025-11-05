@@ -3,38 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Welcome To The DEVOPS Project</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background:#f5f5f5;
-      margin:0;
-      padding:0;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      height:100vh;
-    }
-    .container {
-      background:white;
-      padding:40px;
-      border-radius:12px;
-      box-shadow:0 8px 20px rgba(0,0,0,0.1);
-      text-align:center;
-    }
-    h1 {
-      margin-bottom:10px;
-    }
-    p {
-      color:#444;
-      font-size:1.1rem;
-    }
-  </style>
+  <title>DEVOPS Portal</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="container">
+
+  <div class="container fade-in">
+    <img src="https://cdn-icons-png.flaticon.com/512/4248/4248443.png" class="logo" alt="DevOps Logo">
+
     <h1>Hello 👋</h1>
-    <p>Welcome To The DEVOPS Project</p>
+    <p>Welcome to the DevOps Automation Project</p>
+
+    <button id="learnBtn">Learn More</button>
   </div>
+
+  <div id="infoBox" class="info hidden fade-in">
+    <h2>CI/CD Pipeline Active 🚀</h2>
+    <p>This page is deployed using Jenkins automation with Docker and NGINX.</p>
+  </div>
+
+<script src="script.js"></script>
 </body>
 </html>
