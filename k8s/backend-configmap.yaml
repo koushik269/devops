@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vps-portal-config
+  namespace: ${NAMESPACE}
+  labels:
+    app: vps-portal-backend
+data:
+  NODE_ENV: "${ENVIRONMENT}"
+  PORT: "3001"
+  JWT_EXPIRES_IN: "15m"
+  JWT_REFRESH_EXPIRES_IN: "7d"
+  BCRYPT_ROUNDS: "12"
+  RATE_LIMIT_WINDOW_MS: "900000"
+  RATE_LIMIT_MAX_REQUESTS: "100"
+  SMTP_HOST: "smtp.gmail.com"
+  SMTP_PORT: "587"
+  FROM_EMAIL: "noreply@vpsportal.com"
+  FROM_NAME: "VPS Seller Portal"
+  FRONTEND_URL: "https://${DOMAIN}"
+  CPU_PRICE_PER_CORE: "5"
+  RAM_PRICE_PER_GB: "4"
+  STORAGE_PRICE_PER_GB: "0.1"
