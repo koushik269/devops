@@ -1,0 +1,446 @@
+pipeline {
+    agent any
+
+    environment {
+        // Environment variables
+        DOCKER_REGISTRY = 'your-registry.com'
+        DOCKER_CREDENTIALS = credentials('docker-registry-creds')
+        GITHUB_CREDENTIALS = credentials('github-creds')
+        AWS_CREDENTIALS = credentials('aws-creds')
+
+        // Application settings
+        APP_NAME = 'vps-seller-portal'
+        VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(8)}"
+
+        // Docker image names
+        BACKEND_IMAGE = "${DOCKER_REGISTRY}/${APP_NAME}-backend:${VERSION}"
+        FRONTEND_IMAGE = "${DOCKER_REGISTRY}/${APP_NAME}-frontend:${VERSION}"
+
+        // Environment-specific settings
+        DEV_ENV = 'development'
+        STAGING_ENV = 'staging'
+        PROD_ENV = 'production'
+
+        // Notification settings
+        SLACK_WEBHOOK = credentials('slack-webhook-url')
+        EMAIL_RECIPIENTS = 'team@yourcompany.com'
+    }
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['development', 'staging', 'production'],
+            description: 'Target environment for deployment'
+        )
+        choice(
+            name: 'DEPLOYMENT_TYPE',
+            choices: ['full', 'backend-only', 'frontend-only'],
+            description: 'Type of deployment'
+        )
+        booleanParam(
+            name: 'RUN_SECURITY_SCAN',
+            defaultValue: true,
+            description: 'Run security vulnerability scanning'
+        )
+        booleanParam(
+            name: 'FORCE_DEPLOY',
+            defaultValue: false,
+            description: 'Force deployment even if tests fail'
+        )
+        string(
+            name: 'RELEASE_TAG',
+            defaultValue: '',
+            description: 'Release tag for deployment'
+        )
+    }
+
+    options {
+        // Build options
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+        timeout(time: 2, unit: 'HOURS')
+
+        // Skip stages when possible
+        skipStagesAfterUnstable()
+
+        // Timestamps in logs
+        timestamps()
+
+        // Check out to specific subdirectory
+        checkoutToSubdirectory('vps-portal')
+    }
+
+    triggers {
+        // Webhook trigger for GitHub PRs
+        githubPullRequest(
+            triggerPhrase: 'test this please',
+            onlyTriggerPhrase: false,
+            skipBuildPhrase: '.*\\[skip\\s+ci\\].*',
+            adminList: '',
+            orgList: '',
+            allowMembersOfWhitelistedOrgsAsAdmin: true,
+            githubHooks: true,
+            permitAll: true,
+            autoCloseFailedPullRequests: false,
+            displayBuildErrorsOnDownstreamBuilds: true,
+            cancelQueuedBuildsWithSameBranch: false,
+            useGitHubHooks: true,
+            extensions: [
+                [
+                    $class: 'PRStatusCommentPublisher',
+                    statusCommentFile: 'build/pr-comment.md'
+                ]
+            ]
+        )
+
+        // Cron for nightly builds
+        cron('H 2 * * 1-5') // 2 AM on weekdays
+    }
+
+    stages {
+        stage('Preparation') {
+            steps {
+                script {
+                    // Clean workspace
+                    cleanWs()
+
+                    // Checkout source code
+                    checkout scm
+
+                    // Display environment info
+                    echo "Building ${APP_NAME} version ${VERSION}"
+                    echo "Environment: ${params.ENVIRONMENT}"
+                    echo "Deployment Type: ${params.DEPLOYMENT_TYPE}"
+                    echo "Branch: ${env.BRANCH_NAME}"
+                    echo "Commit: ${env.GIT_COMMIT}"
+
+                    // Validate parameters
+                    if (params.ENVIRONMENT == 'production' && params.BRANCH_NAME != 'main') {
+                        error("Production deployments can only be done from main branch")
+                    }
+
+                    if (params.ENVIRONMENT == 'staging' && !params.BRANCH_NAME.startsWith('release/')) {
+                        error("Staging deployments require release branches")
+                    }
+                }
+            }
+        }
+
+        stage('Code Quality Checks') {
+            parallel {
+                stage('Backend Linting') {
+                    steps {
+                        dir('backend') {
+                            sh '''
+                                echo "Running backend linting..."
+                                npm run lint || true
+                                npm run type-check
+                            '''
+                        }
+                    }
+                }
+
+                stage('Frontend Linting') {
+                    steps {
+                        dir('frontend') {
+                            sh '''
+                                echo "Running frontend linting..."
+                                npm run lint || true
+                                npm run type-check
+                            '''
+                        }
+                    }
+                }
+
+                stage('Security Scan') {
+                    when {
+                        expression { params.RUN_SECURITY_SCAN }
+                    }
+                    steps {
+                        script {
+                            // Run Trivy vulnerability scanner
+                            sh '''
+                                echo "Running security vulnerability scan..."
+                                # Install Trivy if not present
+                                if ! command -v trivy &> /dev/null; then
+                                    sudo apt-get update
+                                    sudo apt-get install wget apt-transport-https gnupg lsb-release
+                                    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+                                    echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+                                    sudo apt-get update
+                                    sudo apt-get install trivy
+                                fi
+
+                                # Scan backend package.json
+                                trivy fs --format json --output backend-scan.json backend/ || true
+                                trivy fs --format json --output frontend-scan.json frontend/ || true
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Unit Tests') {
+            parallel {
+                stage('Backend Tests') {
+                    steps {
+                        dir('backend') {
+                            sh '''
+                                echo "Installing backend dependencies..."
+                                npm ci
+
+                                echo "Running backend unit tests..."
+                                npm test -- --coverage --watchAll=false --passWithNoTests
+                            '''
+                            publishTestResults testResultsPattern: 'backend/junit.xml'
+                            publishCoverage adapters: [coberturaAdapter('backend/coverage/cobertura-coverage.xml')]
+                        }
+                    }
+                }
+
+                stage('Frontend Tests') {
+                    steps {
+                        dir('frontend') {
+                            sh '''
+                                echo "Installing frontend dependencies..."
+                                npm ci
+
+                                echo "Running frontend unit tests..."
+                                npm test -- --coverage --watchAll=false --passWithNoTests
+                            '''
+                            publishTestResults testResultsPattern: 'frontend/junit.xml'
+                            publishCoverage adapters: [coberturaAdapter('frontend/coverage/cobertura-coverage.xml')]
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Integration Tests') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch pattern: "release/.*", comparator: 'REGEXP'
+                    expression { params.ENVIRONMENT != 'development' }
+                }
+            }
+            steps {
+                script {
+                    // Start test environment
+                    sh '''
+                        echo "Starting test environment..."
+                        cd backend
+                        docker-compose -f docker-compose.test.yml up -d
+                        sleep 30
+
+                        echo "Running integration tests..."
+                        npm run test:integration || true
+
+                        echo "Cleaning up test environment..."
+                        docker-compose -f docker-compose.test.yml down -v
+                    '''
+                }
+            }
+        }
+
+        stage('Build Applications') {
+            parallel {
+                stage('Build Backend') {
+                    steps {
+                        dir('backend') {
+                            sh '''
+                                echo "Building backend application..."
+                                npm run build
+
+                                echo "Creating backend Docker image..."
+                                docker build -t ${BACKEND_IMAGE} .
+                            '''
+                        }
+                    }
+                }
+
+                stage('Build Frontend') {
+                    steps {
+                        dir('frontend') {
+                            sh '''
+                                echo "Building frontend application..."
+                                npm run build
+
+                                echo "Creating frontend Docker image..."
+                                docker build -t ${FRONTEND_IMAGE} .
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Push Docker Images') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch pattern: "release/.*", comparator: 'REGEXP'
+                    expression { params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'production' }
+                }
+            }
+            steps {
+                script {
+                    // Login to Docker registry
+                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-registry-creds') {
+                        // Push images
+                        sh '''
+                            echo "Pushing Docker images..."
+                            docker push ${BACKEND_IMAGE}
+                            docker push ${FRONTEND_IMAGE}
+
+                            # Also push with latest tag for main branch
+                            if [ "${env.BRANCH_NAME}" = "main" ]; then
+                                docker tag ${BACKEND_IMAGE} ${DOCKER_REGISTRY}/${APP_NAME}-backend:latest
+                                docker tag ${FRONTEND_IMAGE} ${DOCKER_REGISTRY}/${APP_NAME}-frontend:latest
+                                docker push ${DOCKER_REGISTRY}/${APP_NAME}-backend:latest
+                                docker push ${DOCKER_REGISTRY}/${APP_NAME}-frontend:latest
+                            fi
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Environment') {
+            when {
+                anyOf {
+                    expression { params.DEPLOYMENT_TYPE == 'full' }
+                    expression { params.DEPLOYMENT_TYPE == 'backend-only' }
+                    expression { params.DEPLOYMENT_TYPE == 'frontend-only' }
+                }
+            }
+            steps {
+                script {
+                    def deploymentScript = params.ENVIRONMENT == 'production' ? 'deploy-production.sh' : 'deploy.sh'
+
+                    if (params.DEPLOYMENT_TYPE == 'full' || params.DEPLOYMENT_TYPE == 'backend-only') {
+                        sh """
+                            echo "Deploying backend to ${params.ENVIRONMENT}..."
+                            ./scripts/${deploymentScript} backend ${params.ENVIRONMENT} ${BACKEND_IMAGE}
+                        """
+                    }
+
+                    if (params.DEPLOYMENT_TYPE == 'full' || params.DEPLOYMENT_TYPE == 'frontend-only') {
+                        sh """
+                            echo "Deploying frontend to ${params.ENVIRONMENT}..."
+                            ./scripts/${deploymentScript} frontend ${params.ENVIRONMENT} ${FRONTEND_IMAGE}
+                        """
+                    }
+
+                    // Health check after deployment
+                    sh '''
+                        echo "Running health checks..."
+                        sleep 60
+                        curl -f http://your-${params.ENVIRONMENT}-domain.com/api/health || exit 1
+                        curl -f http://your-${params.ENVIRONMENT}-domain.com/ || exit 1
+                    '''
+                }
+            }
+        }
+
+        stage('End-to-End Tests') {
+            when {
+                anyOf {
+                    branch 'main'
+                    expression { params.ENVIRONMENT == 'staging' }
+                    expression { params.ENVIRONMENT == 'production' }
+                }
+            }
+            steps {
+                script {
+                    sh '''
+                        echo "Running end-to-end tests..."
+                        cd e2e-tests
+                        npm ci
+                        npm run test:e2e -- --baseUrl=http://your-${params.ENVIRONMENT}-domain.com
+                    '''
+                }
+            }
+        }
+
+        stage('Performance Tests') {
+            when {
+                anyOf {
+                    branch 'main'
+                    expression { params.ENVIRONMENT == 'staging' }
+                }
+            }
+            steps {
+                script {
+                    sh '''
+                        echo "Running performance tests..."
+                        # Use k6 or Artillery for performance testing
+                        cd performance-tests
+                        k6 run --vus 10 --duration 30s load-test.js
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Archive build artifacts
+            archiveArtifacts artifacts: 'backend/dist/**,frontend/.next/**,backend-scan.json,frontend-scan.json',
+                              allowEmptyArchive: true
+
+            // Clean up Docker images
+            sh '''
+                echo "Cleaning up Docker images..."
+                docker image prune -f
+            '''
+        }
+
+        success {
+            script {
+                // Send success notifications
+                slackSend(
+                    color: 'good',
+                    channel: '#ci-cd',
+                    message: "✅ ${APP_NAME} v${VERSION} deployed successfully to ${params.ENVIRONMENT}",
+                    webhookUrl: SLACK_WEBHOOK
+                )
+
+                emailext(
+                    subject: "✅ Deployment Success: ${APP_NAME} v${VERSION}",
+                    body: "The ${APP_NAME} application has been successfully deployed to ${params.ENVIRONMENT}.\\n\\nBuild: ${env.BUILD_URL}\\nVersion: ${VERSION}",
+                    to: EMAIL_RECIPIENTS
+                )
+            }
+        }
+
+        failure {
+            script {
+                // Send failure notifications
+                slackSend(
+                    color: 'danger',
+                    channel: '#ci-cd',
+                    message: "❌ ${APP_NAME} build/deployment failed on ${params.ENVIRONMENT}\\nBuild: ${env.BUILD_URL}",
+                    webhookUrl: SLACK_WEBHOOK
+                )
+
+                emailext(
+                    subject: "❌ Build Failure: ${APP_NAME} v${VERSION}",
+                    body: "The ${APP_NAME} build has failed.\\n\\nBuild: ${env.BUILD_URL}\\nEnvironment: ${params.ENVIRONMENT}\\nVersion: ${VERSION}",
+                    to: EMAIL_RECIPIENTS
+                )
+            }
+        }
+
+        unstable {
+            script {
+                slackSend(
+                    color: 'warning',
+                    channel: '#ci-cd',
+                    message: "⚠️ ${APP_NAME} build completed with warnings on ${params.ENVIRONMENT}",
+                    webhookUrl: SLACK_WEBHOOK
+                )
+            }
+        }
+    }
+}
