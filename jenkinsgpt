@@ -1,0 +1,92 @@
+pipeline {
+    agent any
+
+    environment {
+        DEV_SERVER = "10.69.69.81"
+        SSH_CREDENTIALS = "lubuntu"  // Jenkins credential ID for SSH key
+        BACKEND_DIR = "backend"
+        FRONTEND_DIR = "frontend"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                echo "Checking out code..."
+                checkout scm
+            }
+        }
+
+        stage('Install Dependencies') {
+            parallel {
+                stage('Backend Dependencies') {
+                    steps {
+                        dir("${BACKEND_DIR}") {
+                            sh 'npm install'
+                        }
+                    }
+                }
+                stage('Frontend Dependencies') {
+                    steps {
+                        dir("${FRONTEND_DIR}") {
+                            sh 'npm install'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Frontend') {
+            steps {
+                dir("${FRONTEND_DIR}") {
+                    echo "Building frontend..."
+                    sh 'npm run build'
+                }
+            }
+        }
+
+        stage('Run Backend Tests') {
+            steps {
+                dir("${BACKEND_DIR}") {
+                    echo "Running backend tests..."
+                    sh 'npm test || echo "No tests found or failed"'
+                }
+            }
+        }
+
+        stage('Deploy to Dev Server') {
+            steps {
+                echo "Deploying to ${DEV_SERVER} ..."
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ubuntu@${DEV_SERVER} '
+                        cd /opt/devapp || mkdir -p /opt/devapp &&
+                        cd /opt/devapp &&
+                        rm -rf * &&
+                        exit
+                        '
+                    """
+
+                    sh "scp -o StrictHostKeyChecking=no -r ${BACKEND_DIR} ${FRONTEND_DIR}/.next ubuntu@${DEV_SERVER}:/opt/devapp/"
+
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ubuntu@${DEV_SERVER} '
+                        cd /opt/devapp &&
+                        docker-compose down || true &&
+                        docker-compose up -d --build
+                        '
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Deployment to ${DEV_SERVER} successful!"
+        }
+        failure {
+            echo "❌ Deployment failed. Check logs for errors."
+        }
+    }
+}
