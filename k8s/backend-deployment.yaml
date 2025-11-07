@@ -1,0 +1,156 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vps-portal-backend
+  namespace: ${NAMESPACE}
+  labels:
+    app: vps-portal-backend
+    color: blue
+spec:
+  replicas: ${REPLICA_COUNT}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: vps-portal-backend
+      color: blue
+  template:
+    metadata:
+      labels:
+        app: vps-portal-backend
+        color: blue
+        version: ${VERSION}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: backend
+        image: ${BACKEND_IMAGE}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3001
+          name: http
+        env:
+        - name: NODE_ENV
+          value: "${ENVIRONMENT}"
+        - name: PORT
+          value: "3001"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: DATABASE_URL
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: REDIS_URL
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: JWT_SECRET
+        - name: JWT_REFRESH_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: JWT_REFRESH_SECRET
+        - name: STRIPE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: STRIPE_SECRET_KEY
+        - name: PROXMOX_API_URL
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: PROXMOX_API_URL
+        - name: PROXMOX_TOKEN_ID
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: PROXMOX_TOKEN_ID
+        - name: PROXMOX_TOKEN_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: PROXMOX_TOKEN_SECRET
+        - name: TERRAFORM_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vps-portal-secrets
+              key: TERRAFORM_API_TOKEN
+        - name: SMTP_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: vps-portal-config
+              key: SMTP_HOST
+        - name: SMTP_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: vps-portal-config
+              key: SMTP_PORT
+        - name: FROM_EMAIL
+          valueFrom:
+            configMapKeyRef:
+              name: vps-portal-config
+              key: FROM_EMAIL
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      imagePullSecrets:
+      - name: docker-registry-secret
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - vps-portal-backend
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "application"
+        effect: "NoSchedule"
