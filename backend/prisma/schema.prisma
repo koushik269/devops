@@ -1,0 +1,228 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  passwordHash      String   @map("password_hash")
+  firstName         String?  @map("first_name")
+  lastName          String?  @map("last_name")
+  phoneNumber       String?  @map("phone_number")
+  emailVerified     Boolean  @default(false) @map("email_verified")
+  twoFactorEnabled  Boolean  @default(false) @map("two_factor_enabled")
+  twoFactorSecret   String?  @map("two_factor_secret")
+  role              UserRole @default(CUSTOMER)
+  status            UserStatus @default(PENDING)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  lastLoginAt       DateTime? @map("last_login_at")
+
+  // Relations
+  vpsOrders         VpsOrder[]
+  approvedOrders    VpsOrder[] @relation("OrderApprover")
+  invoices          Invoice[]
+
+  @@map("users")
+}
+
+model VpsOrder {
+  id                String        @id @default(cuid())
+  userId            String        @map("user_id")
+  cpuCores          Int           @map("cpu_cores")
+  ramGb             Int           @map("ram_gb")
+  storageGb         Int           @map("storage_gb")
+  operatingSystem   String        @map("operating_system")
+  datacenterLocation String?      @map("datacenter_location")
+  monthlyPrice      Decimal       @map("monthly_price") @db.Decimal(10, 2)
+  status            OrderStatus   @default(PENDING)
+  paymentMethod     String?       @map("payment_method")
+  paymentId         String?       @map("payment_id")
+  approvedBy        String?       @map("approved_by")
+  approvedAt        DateTime?     @map("approved_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  approver          User?         @relation("OrderApprover", fields: [approvedBy], references: [id])
+  vpsInstances      VpsInstance[]
+  invoices          Invoice[]
+  terraformExecutions TerraformExecution[]
+
+  @@map("vps_orders")
+}
+
+model VpsInstance {
+  id                String              @id @default(cuid())
+  orderId           String              @map("order_id")
+  proxmoxVmId       Int?                @map("proxmox_vm_id")
+  ipAddress         String?             @map("ip_address")
+  rootPassword      String?             @map("root_password")
+  sshKeys           Json?               @map("ssh_keys")
+  status            VpsStatus           @default(CREATING)
+  nodeName          String?             @map("node_name")
+  storagePool       String?             @map("storage_pool")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  lastBackupAt      DateTime?           @map("last_backup_at")
+
+  // Relations
+  order             VpsOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("vps_instances")
+}
+
+model Invoice {
+  id                String              @id @default(cuid())
+  userId            String              @map("user_id")
+  orderId           String?             @map("order_id")
+  amount            Decimal             @db.Decimal(10, 2)
+  currency          Currency            @default(USD)
+  status            InvoiceStatus       @default(DRAFT)
+  dueDate           DateTime            @map("due_date")
+  paidAt            DateTime?           @map("paid_at")
+  paymentMethod     String?             @map("payment_method")
+  stripePaymentId   String?             @map("stripe_payment_id")
+  paypalPaymentId   String?             @map("paypal_payment_id")
+  cryptoPaymentId   String?             @map("crypto_payment_id")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order             VpsOrder?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@map("invoices")
+}
+
+model TerraformExecution {
+  id                String              @id @default(cuid())
+  orderId           String              @map("order_id")
+  executionId       String?             @map("execution_id")
+  status            TerraformStatus     @default(PENDING)
+  startedAt         DateTime?           @map("started_at")
+  completedAt       DateTime?           @map("completed_at")
+  outputLogs        String?             @map("output_logs")
+  errorMessage      String?             @map("error_message")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  order             VpsOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("terraform_executions")
+}
+
+model PaymentMethod {
+  id                String              @id @default(cuid())
+  userId            String              @map("user_id")
+  type              PaymentType
+  provider          String
+  providerId        String              @map("provider_id")
+  isDefault         Boolean             @default(false) @map("is_default")
+  lastFour          String?             @map("last_four")
+  expiryMonth       Int?                @map("expiry_month")
+  expiryYear       Int?                @map("expiry_year")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  @@map("payment_methods")
+}
+
+model Session {
+  id                String              @id @default(cuid())
+  userId            String              @map("user_id")
+  token             String              @unique
+  refreshToken      String              @unique @map("refresh_token")
+  expiresAt         DateTime            @map("expires_at")
+  refreshExpiresAt  DateTime            @map("refresh_expires_at")
+  ipAddress         String?             @map("ip_address")
+  userAgent         String?             @map("user_agent")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  @@map("sessions")
+}
+
+model AuditLog {
+  id                String              @id @default(cuid())
+  userId            String?             @map("user_id")
+  action            String
+  resourceType      String              @map("resource_type")
+  resourceId        String?             @map("resource_id")
+  details           Json?
+  ipAddress         String?             @map("ip_address")
+  userAgent         String?             @map("user_agent")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+}
+
+// Enums
+enum UserRole {
+  CUSTOMER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  APPROVED
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+enum VpsStatus {
+  CREATING
+  ACTIVE
+  STOPPED
+  SUSPENDED
+  TERMINATED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+enum TerraformStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum Currency {
+  USD
+  EUR
+  GBP
+}
+
+enum PaymentType {
+  CREDIT_CARD
+  PAYPAL
+  CRYPTO
+  BANK_TRANSFER
+}
