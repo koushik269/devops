@@ -1,0 +1,282 @@
+jenkins:
+  systemMessage: "VPS Seller Portal CI/CD Server"
+  numExecutors: 2
+  scmCheckoutRetryCount: 2
+  mode: NORMAL
+
+  # Security Configuration
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "admin123456"  # Change this in production
+          description: "Jenkins Administrator"
+          roles:
+            - "admin"
+
+  authorizationStrategy:
+    roleBased:
+      roles:
+        global:
+          - name: "admin"
+            description: "Jenkins administrators"
+            permissions:
+              - "Overall/Administer"
+            assignments:
+              - "admin"
+          - name: "developer"
+            description: "Developers with build and deploy permissions"
+            permissions:
+              - "Overall/Read"
+              - "Job/Build"
+              - "Job/Configure"
+              - "Job/Create"
+              - "Job/Delete"
+              - "Job/Read"
+              - "Job/Workspace"
+              - "View/Read"
+              - "View/Configure"
+            assignments:
+              - "dev-team"
+          - name: "readonly"
+            description: "Read-only access"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+              - "View/Read"
+            assignments:
+              - "viewers"
+
+  # Tool Configuration
+  globalNodeProperties:
+    - envVars:
+        envVars:
+          - key: "JAVA_HOME"
+            value: "/opt/java/openjdk"
+          - key: "NODE_HOME"
+            value: "/opt/node"
+          - key: "MAVEN_HOME"
+            value: "/opt/maven"
+
+  # Plugin Configuration
+  pluginManager:
+    plugins:
+      # Core plugins
+      - "workflow-aggregator"
+      - "workflow-step-api"
+      - "workflow-scm-step"
+      - "workflow-support"
+      - "workflow-cps"
+      - "workflow-cps-global-lib"
+      - "workflow-job"
+      - "workflow-multibranch"
+      - "pipeline-stage-view"
+      - "pipeline-rest-api"
+      - "pipeline-github-lib"
+      - "pipeline-model-definition"
+      - "pipeline-model-api"
+      - "pipeline-model-extensions"
+
+      # GitHub Integration
+      - "github"
+      - "github-branch-source"
+      - "github-pullrequest-builder"
+
+      # Docker
+      - "docker-workflow"
+      - "docker-plugin"
+
+      # Kubernetes
+      - "kubernetes"
+      - "kubernetes-cli"
+
+      # Notifications
+      - "slack"
+      - "email-ext"
+
+      # Build Tools
+      - "nodejs"
+      - "maven-plugin"
+
+      # Quality & Security
+      - "sonar"
+      - "warnings"
+      - "dependency-check-jenkins-plugin"
+      - "trivy"
+
+      # UI
+      - "blueocean"
+      - "simple-theme-plugin"
+
+      # Utilities
+      - "timestamper"
+      - "ws-cleanup"
+      - "build-timeout"
+      - "parameterized-trigger"
+      - "copyartifact"
+      - "stash"
+
+credentials:
+  system:
+    domainCredentials:
+      - domain:
+          name: "vps-portal"
+          description: "VPS Seller Portal Credentials"
+        credentials:
+          # GitHub Credentials
+          - usernamePassword:
+              scope: GLOBAL
+              id: "github-creds"
+              username: "your-github-username"
+              password: "your-github-token"
+              description: "GitHub Personal Access Token"
+
+          # Docker Registry
+          - usernamePassword:
+              scope: GLOBAL
+              id: "docker-registry-creds"
+              username: "your-docker-username"
+              password: "your-docker-password"
+              description: "Docker Registry Credentials"
+
+          # AWS Credentials
+          - aws:
+              scope: GLOBAL
+              id: "aws-creds"
+              accessKey: "your-aws-access-key"
+              secretKey: "your-aws-secret-key"
+              description: "AWS Credentials"
+
+          # Slack Webhook
+          - string:
+              scope: GLOBAL
+              id: "slack-webhook-url"
+              secret: "your-slack-webhook-url"
+              description: "Slack Webhook URL"
+
+          # Email Recipients
+          - string:
+              scope: GLOBAL
+              id: "email-recipients"
+              secret: "team@yourcompany.com"
+              description: "Build Notification Recipients"
+
+jobs:
+  - script: >
+      pipelineJob('vps-seller-portal') {
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url 'https://github.com/your-org/vps-seller-portal.git'
+                  credentials 'github-creds'
+                }
+                branch '*/main'
+                scriptPath 'Jenkinsfile'
+              }
+            }
+          }
+        }
+        triggers {
+          githubPush()
+          cron('H 2 * * 1-5')
+        }
+        parameters {
+          choiceParam('ENVIRONMENT', ['development', 'staging', 'production'], 'Target environment')
+          choiceParam('DEPLOYMENT_TYPE', ['full', 'backend-only', 'frontend-only'], 'Deployment type')
+          booleanParam('RUN_SECURITY_SCAN', true, 'Run security vulnerability scanning')
+          booleanParam('FORCE_DEPLOY', false, 'Force deployment even if tests fail')
+          stringParam('RELEASE_TAG', '', 'Release tag for deployment')
+        }
+      }
+
+# Security Configuration
+unclassified:
+  location:
+    adminAddress: "jenkins-admin@yourcompany.com"
+    url: "https://jenkins.yourcompany.com"
+
+  mailer:
+    smtpServer: "smtp.yourcompany.com"
+    smtpPort: "587"
+    useSsl: false
+    useTls: true
+    replyToAddress: "jenkins@yourcompany.com"
+    charset: "UTF-8"
+
+  slackNotifier:
+    workspace: "your-slack-workspace"
+    teamDomain: "your-slack-team"
+    tokenCredentialId: "slack-bot-token"
+    botUser: true
+    room: "#ci-cd"
+
+  sonarGlobalConfiguration:
+    installations:
+      - name: "SonarQube"
+        serverUrl: "https://sonarqube.yourcompany.com"
+        credentialsId: "sonar-token"
+        webhookSecretId: "sonar-webhook"
+
+  trivyConfig:
+    installationName: "Trivy"
+    pathToTrivy: "/usr/local/bin/trivy"
+    cacheDir: "/tmp/trivy"
+
+  globalConfigFiles:
+    configs:
+      - mavenSettings:
+          id: "maven-settings"
+          name: "Maven Settings"
+          comment: "Global Maven settings"
+          content: |
+            <settings>
+              <servers>
+                <server>
+                  <id>your-company-repo</id>
+                  <username>\${env.MAVEN_REPO_USER}</username>
+                  <password>\${env.MAVEN_REPO_PASSWORD}</password>
+                </server>
+              </servers>
+            </settings>
+
+# Tool Configuration
+tool:
+  git:
+    installations:
+      - home: "/usr/bin/git"
+        name: "Default"
+
+  jdk:
+    installations:
+      - name: "JDK 17"
+        home: "/opt/java/openjdk"
+        properties:
+          - installSource:
+              installers:
+                - jdkInstaller:
+                    id: "JDK_17"
+                    jdkType: "LTS"
+
+  nodejs:
+    installations:
+      - name: "NodeJS 18"
+        home: "/opt/node"
+        properties:
+          - installSource:
+              installers:
+                - nodejsInstaller:
+                    id: "18.17.0"
+                    npmPackagesRefreshHours: 72
+
+  maven:
+    installations:
+      - name: "Maven 3.8"
+        home: "/opt/maven"
+        properties:
+          - installSource:
+              installers:
+                - mavenInstaller:
+                    id: "3.8.6"
